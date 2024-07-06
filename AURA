@@ -1,0 +1,458 @@
+
+import os
+import datetime
+import sounddevice as sd
+import numpy as np
+import speech_recognition as sr
+from gtts import gTTS
+from pydub import AudioSegment
+from pydub.playback import play
+import webbrowser
+import threading
+import wikipedia
+import pyjokes
+from bs4 import BeautifulSoup
+import requests
+import csv
+
+# API keys
+WEATHER_API_KEY = "d268dde823d5721a495e5d94f76765e6"
+NEWS_API_KEY = "d729892e9abb45778f19c7905e3cf35b"
+
+# Global variables to manage the state of the music playback
+current_track_index = 0
+is_paused = False
+stop_music = False
+music_files = []
+folder_path = "/Users/rajankumar/Desktop/music"  # Update with your folder path
+TASKS_FILE = "tasks.csv"
+
+def initialize_task_file():
+    """Initialize the CSV file with headers if it doesn't exist."""
+    if not os.path.exists(TASKS_FILE):
+        with open(TASKS_FILE, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(["Task", "Timestamp"])
+
+def add_task(task):
+    """Add a new task to the CSV file."""
+    with open(TASKS_FILE, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow([task, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+    speak(f"Task added: {task}")
+
+def see_tasks():
+    """Read and speak all tasks from the CSV file."""
+    if os.path.exists(TASKS_FILE):
+        with open(TASKS_FILE, mode='r') as file:
+            reader = csv.reader(file)
+            tasks = list(reader)[1:]  # Skip header
+            if tasks:
+                speak("Here are your tasks:")
+                for task, timestamp in tasks:
+                    speak(f"Task: {task}, added on {timestamp}")
+            else:
+                speak("You have no tasks.")
+    else:
+        speak("You have no tasks.")
+
+def remove_task(task_to_remove):
+    """Remove a task from the CSV file."""
+    if os.path.exists(TASKS_FILE):
+        with open(TASKS_FILE, mode='r') as file:
+            reader = csv.reader(file)
+            tasks = list(reader)
+        
+        tasks_to_keep = [task for task in tasks if task[0] != task_to_remove]
+        
+        with open(TASKS_FILE, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerows(tasks_to_keep)
+        
+        if len(tasks) == len(tasks_to_keep):
+            speak(f"Task not found: {task_to_remove}")
+        else:
+            speak(f"Task removed: {task_to_remove}")
+    else:
+        speak("You have no tasks.")
+
+def listen():
+    """
+    Listens to user input using the microphone.
+    Returns the recognized text or None if not understood.
+    """
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        recognizer.adjust_for_ambient_noise(source, duration=1)  # Adjust for ambient noise
+        print("Listening...")
+        audio = recognizer.listen(source)
+    try:
+        user_input = recognizer.recognize_google(audio)
+        print(f"User said: {user_input}")  # Debug print
+        return user_input
+    except sr.UnknownValueError:
+        print("Sorry, I didn't catch that.")
+        speak("Sorry, I didn't catch that.")
+        return None
+    except sr.RequestError as e:
+        print(f"Could not request results; {e}")
+        speak("Sorry, I am having trouble understanding you.")
+        return None
+
+def speak(text):
+    """
+    Converts text to speech using gTTS and plays the audio.
+    """
+    print(f"Speaking: {text}")  # Debug print
+    tts = gTTS(text)
+    tts.save("response.mp3")
+    os.system("mpg321 response.mp3")  # Play the audio
+
+def record_audio(duration=5):
+    """
+    Records audio from the microphone using sounddevice.
+    Returns the recorded audio data.
+    """
+    sample_rate = 44100  # You can adjust this as needed
+    recording = sd.rec(int(sample_rate * duration), samplerate=sample_rate, channels=1)
+    sd.wait()  # Wait for recording to finish
+    return recording
+
+def play_audio(file_path):
+    """
+    Plays the audio file located at the given file path.
+    """
+    global is_paused, stop_music
+    sound = AudioSegment.from_file(file_path)  # Load the audio file
+    play(sound)
+
+def get_music_files(folder_path):
+    """
+    Retrieves all music files from the specified folder.
+    """
+    files = os.listdir(folder_path)
+    audio_files = [f for f in files if f.endswith(('.mp3', '.wav', '.mpeg', '.ogg', '.flac'))]
+    return audio_files
+
+def music_player():
+    """
+    Handles the music playback logic.
+    """
+    global current_track_index, is_paused, stop_music, music_files
+    while not stop_music:
+        if current_track_index < len(music_files):
+            if not is_paused:
+                file_path = os.path.join(folder_path, music_files[current_track_index])
+                print(f"Playing {file_path}")
+                play_audio(file_path)
+                current_track_index += 1
+            else:
+                threading.Event().wait(1)  # Sleep for 1 second while paused
+        else:
+            threading.Event().wait(1)  # Sleep for 1 second if there are no more tracks
+
+def play_music(folder_path):
+    """
+    Starts the music player thread.
+    """
+    global current_track_index, is_paused, stop_music, music_files
+    music_files = get_music_files(folder_path)
+    if not music_files:
+        speak("No audio files found in the folder.")
+        return
+    current_track_index = 0
+    is_paused = False
+    stop_music = False
+    music_thread = threading.Thread(target=music_player)
+    music_thread.start()
+
+def pause_music():
+    """
+    Pauses the music playback.
+    """
+    global is_paused
+    is_paused = True
+    speak("Music paused.")
+
+def resume_music():
+    """
+    Resumes the music playback.
+    """
+    global is_paused
+    is_paused = False
+    speak("Music resumed.")
+
+def next_track():
+    """
+    Skips to the next track.
+    """
+    global current_track_index, stop_music
+    if current_track_index < len(music_files) - 1:
+        current_track_index += 1
+        speak("Playing next track.")
+        stop_music = True  # Stop the current playback
+        stop_music = False  # Start the new track
+        threading.Thread(target=music_player).start()  # Start new thread to handle playback
+    else:
+        speak("This is the last track.")
+
+def previous_track():
+    """
+    Goes back to the previous track.
+    """
+    global current_track_index, stop_music
+    if current_track_index > 0:
+        current_track_index -= 1
+        speak("Playing previous track.")
+        stop_music = True  # Stop the current playback
+        stop_music = False  # Start the new track
+        threading.Thread(target=music_player).start()  # Start new thread to handle playback
+    else:
+        speak("This is the first track.")
+
+def stop_music_playback():
+    """
+    Stops the music playback.
+    """
+    global stop_music
+    stop_music = True
+    speak("Music stopped.")
+
+def open_youtube():
+    """
+    Opens YouTube in the default web browser.
+    """
+    url = "https://www.youtube.com"
+    webbrowser.open(url)
+
+def open_wikipedia():
+    """
+    Opens Wikipedia in the default web browser.
+    """
+    url = "https://www.wikipedia.org"
+    webbrowser.open(url)
+
+def open_google():
+    """
+    Opens Google in the default web browser.
+    """
+    url = "https://www.google.com"
+    webbrowser.open(url)
+
+def open_spotify():
+    """
+    Opens Spotify in the default web browser.
+    """
+    url = "https://www.spotify.com"
+    webbrowser.open(url)
+
+def open_iit_patna():
+    """
+    Opens the IIT Patna website in the default web browser.
+    """
+    url = "https://cet.iitp.ac.in/"
+    webbrowser.open(url)
+
+def fetch_joke():
+    """
+    Fetches a joke from an online API.
+    """
+    return pyjokes.get_joke()
+
+def fetch_wikipedia_summary(topic):
+    """
+    Fetches the summary of a Wikipedia article based on the given topic.
+    """
+    try:
+        summary = wikipedia.summary(topic)
+        return summary
+    except wikipedia.exceptions.PageError:
+        return "Sorry, I couldn't find any information on that topic."
+    except wikipedia.exceptions.DisambiguationError as e:
+        # If the topic is ambiguous, provide options
+        options = ", ".join(e.options[:5])  # Limiting options to the first 5
+        return f"Sorry, the topic '{topic}' is ambiguous. Did you mean: {options}?"
+
+def scrape_website():
+    """
+    Prompts the user to provide a URL, then scrapes the specified website and returns relevant information.
+    """
+    speak("Please provide the URL of the website you want to scrape.")
+    url = input("Please enter the URL of the website you want to scrape: ")  # Prompt user to input URL in terminal
+    if url:
+        try:
+            response = requests.get(url)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Extract title
+            title = soup.title.text.strip()
+            
+            # Extract meta description
+            meta_description = soup.find("meta", attrs={"name": "description"})
+            meta_description = meta_description["content"] if meta_description else None
+            
+            # Extract headings
+            headings = [heading.text.strip() for heading in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"])]
+            
+            # Extract paragraph text
+            paragraphs = [para.text.strip() for para in soup.find_all("p")]
+            speak(f"Title: {title}")
+            speak(f"Description: {meta_description if meta_description else 'No description found'}")
+            return {
+                "title": title,
+                "meta_description": meta_description,
+                "headings": headings,
+                "paragraphs": paragraphs
+            }
+        except Exception as e:
+            speak(f"Error: {e}")
+            return None
+    else:
+        speak("No URL provided.")
+        return None
+
+def tell_date_time():
+    """
+    Provides the current date and time.
+    """
+    current_datetime = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    speak(f"The current date and time is {current_datetime}.")
+
+def fetch_weather(city):
+    """
+    Fetches the weather for the specified city using the OpenWeather API.
+    """
+    url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={WEATHER_API_KEY}&units=metric"
+    try:
+        response = requests.get(url)
+        data = response.json()
+        if data["cod"] != 200:
+            speak(f"Error fetching weather: {data['message']}")
+            return
+
+        weather_description = data["weather"][0]["description"]
+        temperature = data["main"]["temp"]
+        humidity = data["main"]["humidity"]
+        wind_speed = data["wind"]["speed"]
+        
+        weather_report = (f"The weather in {city} is currently {weather_description} "
+                          f"with a temperature of {temperature} degrees Celsius, "
+                          f"humidity at {humidity} percent, and wind speed of {wind_speed} meters per second.")
+        speak(weather_report)
+    except Exception as e:
+        speak(f"Error fetching weather: {e}")
+
+def fetch_news():
+    """
+    Fetches the latest news headlines using the News API.
+    """
+    url = f"https://newsapi.org/v2/top-headlines?country=us&apiKey={NEWS_API_KEY}"
+    try:
+        response = requests.get(url)
+        data = response.json()
+        if data["status"] != "ok":
+            speak(f"Error fetching news: {data['message']}")
+            return
+
+        headlines = [article["title"] for article in data["articles"][:5]]
+        if headlines:
+            speak("Here are the latest news headlines:")
+            for headline in headlines:
+                speak(headline)
+        else:
+            speak("No news headlines found.")
+    except Exception as e:
+        speak(f"Error fetching news: {e}")
+
+def main():
+    initialize_task_file()
+    stop_listening = False
+    while not stop_listening:
+        user_text = listen()
+        if user_text:
+            if user_text.lower() == "stop":
+                print("Stopping the program...")
+                speak("Stopping the program.")
+                stop_listening = True  # Set flag to stop listening
+                break  # Exit the loop immediately
+            elif "hello aura" in user_text.lower() or "hi aura" in user_text.lower():
+                speak("Hello! I'm Aura, your virtual assistant. How can I assist you today?")
+            elif "how are you" in user_text.lower():
+                speak("I'm doing well, thank you for asking!")
+            elif "what can you do" in user_text.lower() or "what are your capabilities" in user_text.lower():
+                speak("I can do various things like play music, provide weather updates, fetch news headlines, tell jokes, and more. Just ask!")
+            elif "open youtube" in user_text.lower():
+                open_youtube()
+            elif "open wikipedia" in user_text.lower():
+                open_wikipedia()
+            elif "open google" in user_text.lower():
+                open_google()
+            elif "open spotify" in user_text.lower():
+                open_spotify()
+            elif "open iit patna" in user_text.lower():
+                open_iit_patna()
+            elif "tell me a joke" in user_text.lower():
+                joke = fetch_joke()
+                speak(joke)
+            elif "search wikipedia for" in user_text.lower():
+                topic = user_text.lower().replace("search wikipedia for", "").strip()
+                summary = fetch_wikipedia_summary(topic)
+                speak(summary)
+            elif any(command in user_text.lower() for command in ["scrape website", "find website", "give website"]):
+                scrape_website()
+            elif "play music" in user_text.lower():
+                play_music(folder_path)
+            elif "pause music" in user_text.lower():
+                pause_music()
+            elif "resume music" in user_text.lower():
+                resume_music()
+            elif "next track" in user_text.lower():
+                next_track()
+            elif "previous track" in user_text.lower():
+                previous_track()
+            elif "stop music" in user_text.lower():
+                stop_music_playback()
+            elif "add task" in user_text.lower():
+                task = user_text.lower().replace("add task", "").strip()
+                if task:
+                    add_task(task)
+                else:
+                    speak("Please specify the task you want to add.")
+            elif "see tasks" in user_text.lower():
+                see_tasks()
+            elif "remove task" in user_text.lower():
+                task = user_text.lower().replace("remove task", "").strip()
+                if task:
+                    remove_task(task)
+                else:
+                    speak("Please specify the task you want to remove.")
+            elif "what is the date and time" in user_text.lower() or "current date and time" in user_text.lower():
+                tell_date_time()
+            elif "weather in" in user_text.lower():
+                city = user_text.lower().replace("weather in", "").strip()
+                fetch_weather(city)
+            elif "news" in user_text.lower():
+                fetch_news()
+            else:
+                try:
+                    # Evaluate basic arithmetic expressions
+                    result = eval(user_text)
+                    print(f"Result: {result}")
+                    speak(f"The result is {result}")
+                except Exception as e:
+                    print(f"Error: {e}")
+                    speak("I'm sorry, I didn't understand that.")
+                # Record audio and play it back
+                print("Recording audio for 5 seconds...")
+                recorded_audio = record_audio()
+                print("Playing back recorded audio...")
+                # Save the recorded audio to a file
+                recorded_audio_file = "recorded_audio.wav"
+                AudioSegment(recorded_audio.flatten(), frame_rate=44100, sample_width=2, channels=1).export(recorded_audio_file, format="wav")
+                # Play the recorded audio file
+                play_audio(recorded_audio_file)
+        else:
+            print("Please try again.")
+
+if __name__ == "__main__":
+    main()
